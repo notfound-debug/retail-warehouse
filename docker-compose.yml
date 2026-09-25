@@ -1,0 +1,34 @@
+# Two containers:
+#   oracle - Oracle Database 21c XE. The warehouse lives in schema DW inside PDB XEPDB1.
+#   tools  - Debian with Bash, cron and sqlplus. Runs the nightly load, tests and exports.
+# Start everything with ./bin/up.sh (it also waits until the database accepts logins).
+
+services:
+  oracle:
+    image: gvenzl/oracle-xe:21-slim
+    env_file: .env                     # ORACLE_PASSWORD for the image; DW_USER/DW_PASSWORD for the init script
+    ports:
+      - "127.0.0.1:1521:1521"          # optional: lets SQL Developer on Windows connect; localhost only
+    volumes:
+      - oracle-data:/opt/oracle/oradata                          # database files survive container restarts
+      - ./docker/oracle/init:/container-entrypoint-initdb.d:ro   # runs once, on first start: creates DW user
+      - ./data:/data:ro                                          # CSVs read by the external tables
+      - ./logs/ext_logs:/ext_logs                                # external-table .log and .bad files
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]  # script shipped with the gvenzl image
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  tools:
+    build: ./docker/tools
+    env_file: .env
+    volumes:
+      - .:/work                        # the repo, so scripts and SQL are edited on Windows and run here
+    working_dir: /work
+    depends_on:
+      - oracle
+
+volumes:
+  oracle-data:

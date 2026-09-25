@@ -1,0 +1,11 @@
+# Scripts must keep Unix line endings even when checked out on Windows,
+# otherwise bash in the container fails with "$'\r': command not found".
+*.sh        text eol=lf
+*.sql       text eol=lf
+*.pks       text eol=lf
+*.pkb       text eol=lf
+*.cron      text eol=lf
+Dockerfile  text eol=lf
+.env*       text eol=lf
+# Data files are stored byte-for-byte (the Olist CSVs use CRLF).
+*.csv       -text
