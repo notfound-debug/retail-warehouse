@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run SQL as the warehouse user with sqlplus. Runs inside the tools container.
 #
-#   bin/sql.sh path/to/script.sql [script args...]
+#   bin/sql.sh sql/some_script.sql [script args...]   (path relative to the repo root)
 #   bin/sql.sh -c "SELECT COUNT(*) FROM fact_sales;"
 #
 # The password is sent to sqlplus on stdin (CONNECT inside the heredoc),
@@ -10,6 +10,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Run from the repo root so every @sql/... path inside SQL scripts resolves the same way.
+cd "$ROOT"
 # Load credentials. tr removes Windows line endings in case .env was edited in Notepad.
 set -a
 source <(tr -d '\r' < "$ROOT/.env")

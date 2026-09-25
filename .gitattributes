@@ -7,5 +7,5 @@
 *.cron      text eol=lf
 Dockerfile  text eol=lf
 .env*       text eol=lf
-# Data files are stored byte-for-byte (the Olist CSVs use CRLF).
+# Data files are stored byte-for-byte (git must never change their line endings).
 *.csv       -text
