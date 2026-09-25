@@ -15,7 +15,9 @@
 -- Their weakness is locking: one bitmap entry covers many rows, so concurrent
 -- inserts/updates from many sessions block each other. That is why bitmap
 -- indexes suit a warehouse (one nightly batch writer, many readers) and are
--- avoided in OLTP systems.
+-- avoided in OLTP systems. Even a single batch writer pays for row-by-row
+-- bitmap maintenance, so pkg_fact marks these indexes UNUSABLE during the
+-- load and rebuilds them afterwards (measured: 224 s -> 4.5 s).
 --
 -- B-TREE indexes on the HIGH-cardinality foreign keys:
 --   customer_key  ~96K distinct values, almost one per row

@@ -151,7 +151,10 @@ Why `customer_unique_id` and not `customer_id`: in Olist, `customer_id` is gener
 
 **How a change is detected and closed (two statements, one transaction):**
 1. Build one source row per `customer_unique_id` from staging (rule in section f).
-2. **Close:** a `MERGE INTO dim_customer d USING src s ON (d.customer_unique_id = s.customer_unique_id AND d.is_current = 'Y') WHEN MATCHED THEN UPDATE SET is_current = 'N', effective_to = :batch_start WHERE <any tracked attribute differs>`. The comparison uses `DECODE(d.city, s.city, 0, 1) = 1 OR ...` because `DECODE` treats two NULLs as equal and a plain `<>` does not.
+2. **Close:** `MERGE INTO dim_customer d USING (SELECT customer_key of current rows JOIN source WHERE any tracked attribute differs) changed ON (d.customer_key = changed.customer_key) WHEN MATCHED THEN UPDATE SET is_current = 'N', effective_to = :batch_start`. The comparison uses `DECODE(d.city, s.city, 0, 1) = 1 OR ...` because `DECODE` treats two NULLs as equal and a plain `<>` does not.
+   *Refined during M3:*
+   - The draft matched `ON (customer_unique_id AND is_current = 'Y')`. Oracle refuses to update a column used in the MERGE `ON` clause (ORA-38104), so the MERGE matches on `customer_key` instead.
+   - An intermediate `UPDATE ... WHERE EXISTS` version was correct but ran its correlated subquery about 96K times once statistics existed (over 10 minutes). The join form does it in one pass.
 3. **Insert:** `INSERT` a new row (version = previous max + 1, or 1 if the person is new, is_current = 'Y', effective_from = :batch_start) for every source person who **has no current row**. After step 2 that means brand-new people plus people whose row was just closed.
 4. `COMMIT` once, after both steps. If step 3 fails, step 2 rolls back too, so a person is never left with no current row.
 
@@ -208,6 +211,7 @@ Indexes, planned for M2 with a comment in the DDL:
 - **Bitmap** on low-cardinality foreign keys: `order_date_key` (634 distinct values), `payment_type_key` (6), `seller_key` (about 3K), `order_status` (8).
   - Bitmap indexes are compact for columns with few distinct values, and Oracle can combine several with AND/OR for star-query filters.
   - Their weakness is locking under concurrent DML. That doesn't matter here: there is one writer, the nightly batch, and many readers.
+  - *Added in M3:* row-by-row bitmap maintenance is also slow for that single writer. The measured first fact load took 224 s with the bitmap indexes in place, versus 4.2 s with them UNUSABLE plus 0.24 s to rebuild. So `pkg_fact` marks them UNUSABLE before the load and REBUILDs them after it, including after a failure.
 - **B-tree** on `customer_key` (about 96K distinct values, nearly unique per row) and `product_key` (about 33K). At that cardinality a bitmap has no advantage.
 
 **Measure definition used by every view:** revenue = `SUM(price)`, the merchandise value excluding freight, over orders whose status is not `canceled` or `unavailable`. (Open question 11.)
@@ -267,7 +271,7 @@ This is followed by `INSERT /*+ APPEND */` (direct-path) and a `COMMIT`, which a
 
 ### MERGE usage
 - **Type 1 dimensions:** `MERGE INTO dim_x USING (staged, de-duplicated source) ON (natural key)`. `WHEN MATCHED THEN UPDATE ... WHERE <something changed>`, and `WHEN NOT MATCHED THEN INSERT (seq.NEXTVAL, ...)`. One statement does both jobs, and the `WHERE` avoids rewriting unchanged rows.
-- **SCD2 customer:** `MERGE` only to *close* changed current rows, followed by `INSERT` of new versions (section d).
+- **SCD2 customer:** a `MERGE` matched on `customer_key` *closes* changed current rows, followed by an `INSERT` of new versions (section d explains why it matches on the key and not on `is_current`: ORA-38104).
 - **Fact:** `MERGE ON (order_id, order_item_id)`.
   - `WHEN NOT MATCHED`: insert the row.
   - `WHEN MATCHED`: update only the fields that legitimately change after an order is placed, namely `order_status`, `delivered_date_key` and `load_batch_id`. An order moves from shipped to delivered in a later extract.
@@ -277,17 +281,19 @@ This is followed by `INSERT /*+ APPEND */` (direct-path) and a `COMMIT`, which a
 It is used only in `pkg_fact.load_fact_sales`, the one large table:
 - A cursor joins staged order lines to their order, the primary payment type, and the dimension keys. It returns **raw strings**.
 - `FETCH ... BULK COLLECT INTO l_rows LIMIT 10000` pulls rows in chunks of 10,000.
-- `FORALL i IN 1 .. l_rows.COUNT SAVE EXCEPTIONS MERGE INTO fact_sales USING (SELECT <TO_NUMBER/TO_DATE of l_rows(i) fields> FROM dual) ...` writes each chunk.
+- **Layer 1, convert:** a PL/SQL loop over the chunk converts each line's text to typed values (NUMBER, YYYYMMDD date keys). It makes no SQL calls, so it does no engine switching. A line that can't be converted (e.g. price `abc`) is logged with its key and raw values, and skipped.
+- **Layer 2, write:** `FORALL i IN 1 .. l_rows.COUNT SAVE EXCEPTIONS MERGE INTO fact_sales USING (SELECT l_rows(i).<typed fields> FROM dual) ...` writes the converted chunk. SAVE EXCEPTIONS collects database-level row errors, e.g. a delivered date outside `dim_date` violates the FK (ORA-02291).
+- *Changed in M3:* the draft converted text inside the MERGE's `USING` subquery. The broken-file test showed that a conversion error there **aborts the whole FORALL statement**; SAVE EXCEPTIONS does not catch it. Converting first in PL/SQL fixed it, and the same test now logs each bad row and keeps the rest.
 - **Why not a row-by-row loop:** a loop switches between the PL/SQL and SQL engines once per row (112K switches). BULK COLLECT/FORALL switches once per 10,000-row chunk.
 - **Why `LIMIT`:** without it, the whole result set is held in session memory (PGA). XE is capped at 2 GB of RAM. `LIMIT` keeps memory flat however big the extract grows.
-- **Why not one giant set-based MERGE,** which would be faster still: a single statement fails completely on the first bad value. `SAVE EXCEPTIONS` lets the load keep every good row and log each bad row with its key (`order_id|order_item_id`). Type conversions are placed inside the FORALL statement, not in the cursor, so that a bad value fails *only its own row*. The alternative would be Oracle's DML error logging (`LOG ERRORS INTO`). This project uses one error table, so SAVE EXCEPTIONS is used.
+- **Why not one giant set-based MERGE,** which would be faster still: a single statement fails completely on the first bad value. The two layers let the load keep every good row and log each bad row with its key (`order_id|order_item_id`). The alternative would be Oracle's DML error logging (`LOG ERRORS INTO`). This project uses one error table, so SAVE EXCEPTIONS is used.
 
 ### Error-logging design
 - `etl_batch(batch_id PK, feed_name, source_dir, started_at, finished_at, status, error_count)`, where status is RUNNING, SUCCESS, SUCCESS_WITH_ERRORS or FAILED.
-- `etl_error_log(error_id PK, batch_id FK, logged_at, step_name, source_key, error_code, error_message)`, where error_message includes `DBMS_UTILITY.FORMAT_ERROR_BACKTRACE` for step failures.
+- `etl_error_log(error_id PK, batch_id FK, logged_at, step_name, source_key, error_code, error_message)`, where error_message holds `DBMS_UTILITY.FORMAT_ERROR_STACK` (the full error stack, e.g. the KUP-04040 "file not found" line that SQLERRM alone drops) plus `FORMAT_ERROR_BACKTRACE` for step failures.
 - **Autonomous transaction:** `pkg_log.log_error` and `finish_batch` use `PRAGMA AUTONOMOUS_TRANSACTION` and commit on their own. When a step fails, its work is rolled back, but the error record, which was written in its own transaction, **survives the rollback**. Without the pragma, the rollback would erase the evidence of what failed.
 - **Two kinds of error:**
-  1. **Row-level** (the fact load): ORA-24381 from SAVE EXCEPTIONS. The load loops over `SQL%BULK_EXCEPTIONS`, logs each failed row, and continues. The batch ends `SUCCESS_WITH_ERRORS` and the wrapper exits 2.
+  1. **Row-level** (the fact load): either a conversion error caught in layer 1, or ORA-24381 from SAVE EXCEPTIONS in layer 2 (the load loops over `SQL%BULK_EXCEPTIONS`). Each failed row is logged and the load continues. The batch ends `SUCCESS_WITH_ERRORS` and the wrapper exits 2.
   2. **Step-level** (anything else, e.g. a missing file or a failed dimension MERGE): each procedure's `WHEN OTHERS` handler calls `log_error`, runs `ROLLBACK`, then `RAISE`. `pkg_etl` catches it, sets the batch to FAILED and re-raises. sqlplus `WHENEVER SQLERROR EXIT FAILURE` makes the wrapper exit 1.
 - Row counts per step are printed with `DBMS_OUTPUT` and end up in the wrapper's log file.
 
@@ -487,6 +493,7 @@ Each milestone ends with a commit (plain message, no attribution trailers). **I 
 - **Instant Client download.** The Dockerfile downloads from Oracle's public, no-login URL at a pinned version. If Oracle moves the file, the build fails loudly and the pin needs updating.
 - **Bind-mount speed.** Reading about 60 MB of CSV from a Windows folder into a container is slower than a native disk. I expect a full load in minutes, not seconds, and will report the real time.
 - **XE limits.** 2 CPU threads, 2 GB RAM and 12 GB of user data are far above what this needs.
+- **Redo log size (resolved in M3).** The gvenzl slim image ships two 10 MB redo logs, and the first full load spent about 380 s waiting on `log file switch (checkpoint incomplete)`. `docker/oracle/init/02_resize_redo_logs.sh` replaces them with 3 x 200 MB on first start.
 - **PID reuse in the lock check.** A stale lock whose PID was reused by an unrelated process would be treated as live, and the run would be skipped, not duplicated. That is the safe direction, and it is documented.
 - **cron only while Docker runs.** See section c.
 
