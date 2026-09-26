@@ -92,15 +92,13 @@ Every dimension except `dim_date` has a `-1 Unknown` row, so a sale is never los
 
 Built in Tableau Public from `tableau/*.csv`; step-by-step instructions are in [tableau/GUIDE.md](tableau/GUIDE.md).
 
-**Revenue Trend**: monthly revenue, month-over-month growth, 2017 vs 2018 year-to-date, KPIs.
-<!-- Screenshot: add docs/screenshots/revenue_trend.png (GUIDE.md step 57), then remove this comment. -->
+**Revenue Trend**: monthly revenue (item price, excluding freight and canceled orders), January 2017 – August 2018.
 ![Revenue Trend dashboard](docs/screenshots/revenue_trend.png)
 
-**Customer Cohort Retention**: retention heatmap by first-purchase month, average retention curve, cohort sizes.
-<!-- Screenshot: add docs/screenshots/cohort_retention.png (GUIDE.md step 57), then remove this comment. -->
+**Customer Cohort Retention**: for each month of first purchase, the share of customers who ordered again 1–15 months later.
 ![Cohort Retention dashboard](docs/screenshots/cohort_retention.png)
 
-Live workbook: *link to be added after publishing to Tableau Public*.
+The step-by-step build, including the optional extra charts (month-over-month growth, year-to-date by year, KPIs, average retention curve), is in [tableau/GUIDE.md](tableau/GUIDE.md).
 
 ## What the data shows
 - Revenue grew from R$ 6.1M in 2017 to R$ 7.3M in Jan–Aug 2018. The peak is November 2017 (Black Friday, 24 Nov: 1,166 orders in a day).
