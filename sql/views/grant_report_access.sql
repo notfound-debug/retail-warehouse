@@ -1,6 +1,7 @@
 -- =============================================================================
 -- grant_report_access.sql
--- Grants SELECT on every report view (V_RPT_*) to the role DW_REPORTING, which
+-- Grants SELECT on every report view (V_RPT_*) and reference view (V_REF_*,
+-- key lists for pre-load checks) to the role DW_REPORTING, which
 -- the read-only reporting user holds (docker/oracle/init/03_create_report_user.sh).
 -- Only the views: the role gets no access to fact, dimension, staging or ETL
 -- tables. A view runs with its owner's rights, so the grantee can read the view
@@ -14,11 +15,13 @@ DECLARE
     l_granted       PLS_INTEGER := 0;
 BEGIN
     FOR v IN (SELECT view_name FROM user_views
-              WHERE view_name LIKE 'V\_RPT\_%' ESCAPE '\' ORDER BY view_name) LOOP
+              WHERE view_name LIKE 'V\_RPT\_%' ESCAPE '\'
+                 OR view_name LIKE 'V\_REF\_%' ESCAPE '\'
+              ORDER BY view_name) LOOP
         EXECUTE IMMEDIATE 'GRANT SELECT ON ' || v.view_name || ' TO dw_reporting';
         l_granted := l_granted + 1;
     END LOOP;
-    DBMS_OUTPUT.PUT_LINE('  SELECT granted to DW_REPORTING on ' || l_granted || ' report views');
+    DBMS_OUTPUT.PUT_LINE('  SELECT granted to DW_REPORTING on ' || l_granted || ' views');
 EXCEPTION
     WHEN e_no_such_role THEN
         DBMS_OUTPUT.PUT_LINE('  Role DW_REPORTING does not exist; no reporting grants made '

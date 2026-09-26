@@ -51,8 +51,14 @@ $1;" | tr -d '[:space:]'
 }
 
 # Run the nightly wrapper with the given arguments; print only its exit code.
+# The warehouse's own tests must not depend on another project being up, so the
+# PRELOAD_CHECK from .env is switched off unless a test passes its own
+# --preload-check (section 12 does).
 load() {
-    bin/nightly_load.sh "$@" > /dev/null
+    case " $* " in
+        *" --preload-check "*) bin/nightly_load.sh "$@" > /dev/null ;;
+        *)                     bin/nightly_load.sh --preload-check '' "$@" > /dev/null ;;
+    esac
     echo $?
 }
 
@@ -259,15 +265,23 @@ check "cohort_retention.csv rows = view rows" \
 # -----------------------------------------------------------------------------
 section "12. Integration points for other projects"
 # Read-only reporting user (created by docker/oracle/init/03_create_report_user.sh).
-check "install granted SELECT on all 12 views to DW_REPORTING" \
-      "$(sql_value "SELECT COUNT(*) FROM user_tab_privs_made WHERE grantee = 'DW_REPORTING' AND privilege = 'SELECT' AND table_name LIKE 'V\_RPT\_%' ESCAPE '\'")" "12"
+check "install granted SELECT on the 12 report views + the key view to DW_REPORTING" \
+      "$(sql_value "SELECT COUNT(*) FROM user_tab_privs_made WHERE grantee = 'DW_REPORTING' AND privilege = 'SELECT'
+                    AND (table_name LIKE 'V\_RPT\_%' ESCAPE '\' OR table_name = 'V_REF_NATURAL_KEYS')")" "13"
+check "key view: one row per seller, product and person (as the reporting user)" \
+      "$(bin/sql.sh --report -c "SET HEADING OFF FEEDBACK OFF PAGESIZE 0
+SELECT LISTAGG(key_type || '=' || n, ',') WITHIN GROUP (ORDER BY key_type)
+FROM (SELECT key_type, COUNT(DISTINCT key_value) n FROM dw.v_ref_natural_keys GROUP BY key_type);" | tr -d '[:space:]')" \
+      "$(sql_value "SELECT 'customer=' || (SELECT COUNT(DISTINCT customer_unique_id) FROM dim_customer WHERE customer_key <> -1)
+                    || ',product=' || (SELECT COUNT(*) FROM dim_product WHERE product_key <> -1)
+                    || ',seller=' || (SELECT COUNT(*) FROM dim_seller WHERE seller_key <> -1) FROM dual")"
 check "reporting user can read a view" \
       "$(bin/sql.sh --report -c "SET HEADING OFF FEEDBACK OFF PAGESIZE 0
 SELECT COUNT(*) FROM dw.v_rpt_monthly_revenue;" | tr -d '[:space:]')" \
       "$(sql_value "SELECT COUNT(*) FROM v_rpt_monthly_revenue")"
-check "reporting user sees only the 12 report views in DW" \
+check "reporting user sees only the 13 granted views in DW, no tables" \
       "$(bin/sql.sh --report -c "SET HEADING OFF FEEDBACK OFF PAGESIZE 0
-SELECT COUNT(*) || '/' || SUM(CASE WHEN object_name LIKE 'V\_RPT\_%' ESCAPE '\' THEN 1 ELSE 0 END) FROM all_objects WHERE owner = 'DW';" | tr -d '[:space:]')" "12/12"
+SELECT COUNT(*) || '/' || SUM(CASE WHEN object_type = 'VIEW' THEN 1 ELSE 0 END) FROM all_objects WHERE owner = 'DW';" | tr -d '[:space:]')" "13/13"
 check "reporting user cannot read the fact table" \
       "$(bin/sql.sh --report -c "SELECT COUNT(*) FROM dw.fact_sales;" 2>&1 | grep -o 'ORA-00942' | head -1)" "ORA-00942"
 check "reporting user cannot change data" \
@@ -281,6 +295,8 @@ check "check output and reason are in the run log" \
       "$(grep -c -E 'Pre-load check: exit 7|pre-load check failed \(its exit code 7\)' "$(latest_log)")" "2"
 check "passing check sees mode, directory and folder, then the load runs" \
       "$(load --delta --preload-check '[ "$LOAD_MODE" = delta ] && [ "$LOAD_SOURCE_DIR" = DELTA_DIR ] && [ -f "$LOAD_SOURCE_PATH/customer_delta.csv" ]')" "0"
+check "placeholders {mode} and {source} are filled in" \
+      "$(load --delta --preload-check 'test "{mode}/{source}" = "delta/DELTA_DIR"')" "0"
 
 # -----------------------------------------------------------------------------
 echo

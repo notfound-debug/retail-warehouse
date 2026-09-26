@@ -11,9 +11,13 @@
 # Pre-load check (optional)
 #   If PRELOAD_CHECK in .env is not empty, that command runs before the load,
 #   while the lock is held (e.g. an extract validator from another project).
-#   It sees LOAD_MODE (full/delta), LOAD_SOURCE_DIR (e.g. RAW_DIR) and
-#   LOAD_SOURCE_PATH (the folder holding the files). Exit code 0 = go ahead;
-#   anything else = the load is skipped and nothing in the database changes.
+#   The placeholders {mode} (full/delta) and {source} (e.g. RAW_DIR) in the
+#   command are filled in here; the same values, plus the folder holding the
+#   files, are also in the environment as LOAD_MODE, LOAD_SOURCE_DIR and
+#   LOAD_SOURCE_PATH (for a script). Write no "$" in .env: Docker Compose reads
+#   that file too and would try to fill in $NAMES itself.
+#   Exit code 0 = go ahead; anything else = the load is skipped and nothing in
+#   the database changes.
 #
 # What it guarantees
 #   * Only one load at a time: a lock file holds the PID of the running load.
@@ -123,9 +127,11 @@ if [ -n "$PRELOAD_CHECK" ]; then
         TEST_DIR)  check_path="$ROOT/data/test" ;;
         *)         check_path="" ;;
     esac
-    log "Pre-load check: $PRELOAD_CHECK"
+    check_cmd=${PRELOAD_CHECK//\{mode\}/$MODE}
+    check_cmd=${check_cmd//\{source\}/$SOURCE_DIR}
+    log "Pre-load check: $check_cmd"
     LOAD_MODE="$MODE" LOAD_SOURCE_DIR="$SOURCE_DIR" LOAD_SOURCE_PATH="$check_path" \
-        bash -c "$PRELOAD_CHECK" >> "$LOG_FILE" 2>&1
+        bash -c "$check_cmd" >> "$LOG_FILE" 2>&1
     check_rc=$?
     if [ "$check_rc" -ne 0 ]; then
         finish 5 "SKIPPED: pre-load check failed (its exit code $check_rc); nothing was loaded"

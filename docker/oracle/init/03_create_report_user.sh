@@ -3,14 +3,16 @@
 #
 # Creates read-only access for other applications (e.g. a reporting portal):
 #   * role DW_REPORTING: sql/views/grant_report_access.sql (run by the warehouse
-#     install) grants it SELECT on the 12 DW.V_RPT_* views, and nothing else;
+#     install) grants it SELECT on the 12 DW.V_RPT_* views and on
+#     DW.V_REF_NATURAL_KEYS (key lists for pre-load checks), and nothing else;
 #   * user REPORT_USER (from .env): may log in and holds DW_REPORTING.
 # The user cannot see the fact/dimension tables, staging, or ETL tables, and
 # cannot change anything. Applications query e.g. dw.v_rpt_monthly_revenue.
 #
 # Safe to run again (existing role/user are kept). To apply it to an existing
 # database, from the repo root in Git Bash:
-#   set -a; source .env; set +a
+#   export REPORT_USER=$(grep -m1 '^REPORT_USER=' .env | cut -d= -f2-)
+#   export REPORT_PASSWORD=$(grep -m1 '^REPORT_PASSWORD=' .env | cut -d= -f2-)
 #   docker compose exec -T -e REPORT_USER -e REPORT_PASSWORD oracle \
 #       bash /container-entrypoint-initdb.d/03_create_report_user.sh
 # (-e NAME with no value passes the variable from your shell, so the password
