@@ -16,13 +16,22 @@ mkdir -p logs/ext_logs logs/nightly data/delta data/test
 
 docker compose up -d --build
 
-# "Container running" is not the same as "database accepts connections":
+# "Container running" is not the same as "database ready":
 # Oracle needs time to open, and on the very first start it also runs the
-# init script that creates the DW user. So test a real login as DW.
+# init scripts (create the DW user, resize the redo logs). Two conditions:
+#   1. the image has printed DATABASE IS READY TO USE, which happens only after
+#      every init script has finished (the DW user can log in before the redo
+#      log script is done, so a login alone is not enough on first start);
+#   2. a real login as DW works.
+db_ready() {
+    docker compose logs oracle 2>/dev/null | grep -q "DATABASE IS READY TO USE" &&
+    docker compose exec -T tools bin/sql.sh -c "SELECT 'DW_READY' AS status FROM dual;" 2>/dev/null | grep -q DW_READY
+}
+
 echo "Waiting for Oracle to accept logins as the warehouse user (first start can take a few minutes)..."
 max_wait=900
 waited=0
-until docker compose exec -T tools bin/sql.sh -c "SELECT 'DW_READY' AS status FROM dual;" 2>/dev/null | grep -q DW_READY; do
+until db_ready; do
     # If Oracle crashed (e.g. the init script failed), stop waiting right away.
     if [ -z "$(docker compose ps -q --status running oracle)" ]; then
         echo "ERROR: the oracle container is not running. Last log lines:"
