@@ -23,9 +23,11 @@ else
     body="@$1 ${*:2}"
 fi
 
+# ROLLBACK: on an error, sqlplus would otherwise COMMIT the session's pending
+# changes before exiting (its default), keeping half of a failed script.
 sqlplus -s -L /nolog <<EOF
-WHENEVER SQLERROR EXIT FAILURE
-WHENEVER OSERROR EXIT FAILURE
+WHENEVER SQLERROR EXIT FAILURE ROLLBACK
+WHENEVER OSERROR EXIT FAILURE ROLLBACK
 CONNECT ${DW_USER}/"${DW_PASSWORD}"@//${DW_CONNECT}
 SET SERVEROUTPUT ON SIZE UNLIMITED
 $body
