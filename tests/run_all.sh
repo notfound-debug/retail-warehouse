@@ -21,6 +21,7 @@
 #   9  views         all 12 report views return rows
 #  10  arguments     bad arguments are rejected
 #  11  exports       the two Tableau CSVs match their views and the warehouse totals
+#  12  integration   read-only reporting user sees only the views; pre-load check gates the load
 # Exit code: 0 if every check passed, 1 otherwise.
 # =============================================================================
 set -uo pipefail
@@ -254,6 +255,32 @@ check "cohort_retention.csv header" "$(head -1 tableau/cohort_retention.csv)" \
       "cohort_month,months_since_first,cohort_size,active_customers,retention_pct"
 check "cohort_retention.csv rows = view rows" \
       "$(( $(wc -l < tableau/cohort_retention.csv) - 1 ))" "$(sql_value "SELECT COUNT(*) FROM v_rpt_cohort_retention")"
+
+# -----------------------------------------------------------------------------
+section "12. Integration points for other projects"
+# Read-only reporting user (created by docker/oracle/init/03_create_report_user.sh).
+check "install granted SELECT on all 12 views to DW_REPORTING" \
+      "$(sql_value "SELECT COUNT(*) FROM user_tab_privs_made WHERE grantee = 'DW_REPORTING' AND privilege = 'SELECT' AND table_name LIKE 'V\_RPT\_%' ESCAPE '\'")" "12"
+check "reporting user can read a view" \
+      "$(bin/sql.sh --report -c "SET HEADING OFF FEEDBACK OFF PAGESIZE 0
+SELECT COUNT(*) FROM dw.v_rpt_monthly_revenue;" | tr -d '[:space:]')" \
+      "$(sql_value "SELECT COUNT(*) FROM v_rpt_monthly_revenue")"
+check "reporting user sees only the 12 report views in DW" \
+      "$(bin/sql.sh --report -c "SET HEADING OFF FEEDBACK OFF PAGESIZE 0
+SELECT COUNT(*) || '/' || SUM(CASE WHEN object_name LIKE 'V\_RPT\_%' ESCAPE '\' THEN 1 ELSE 0 END) FROM all_objects WHERE owner = 'DW';" | tr -d '[:space:]')" "12/12"
+check "reporting user cannot read the fact table" \
+      "$(bin/sql.sh --report -c "SELECT COUNT(*) FROM dw.fact_sales;" 2>&1 | grep -o 'ORA-00942' | head -1)" "ORA-00942"
+check "reporting user cannot change data" \
+      "$(bin/sql.sh --report -c "DELETE FROM dw.v_rpt_monthly_revenue;" 2>&1 | grep -o 'ORA-01031' | head -1)" "ORA-01031"
+
+# Pre-load check (PRELOAD_CHECK in .env, or --preload-check on the command line).
+batch_before=$(last_batch)
+check "failing pre-load check skips the load (exit 5)" "$(load --delta --preload-check 'exit 7')" "5"
+check "database not touched when the check fails" "$(last_batch)" "$batch_before"
+check "check output and reason are in the run log" \
+      "$(grep -c -E 'Pre-load check: exit 7|pre-load check failed \(its exit code 7\)' "$(latest_log)")" "2"
+check "passing check sees mode, directory and folder, then the load runs" \
+      "$(load --delta --preload-check '[ "$LOAD_MODE" = delta ] && [ "$LOAD_SOURCE_DIR" = DELTA_DIR ] && [ -f "$LOAD_SOURCE_PATH/customer_delta.csv" ]')" "0"
 
 # -----------------------------------------------------------------------------
 echo

@@ -41,7 +41,7 @@ cp .env.example .env                               # 1. then edit the two passwo
 ./bin/up.sh                                        # 2. start Oracle + tools; waits until the DW user can log in
 docker compose exec tools bin/install.sh           # 3. create tables, date dimension, packages, views
 docker compose exec tools bin/nightly_load.sh      # 4. full load (about 20-40 s); prints one summary line
-docker compose exec tools tests/run_all.sh         # 5. optional: 79-check test suite (rebuilds the schema from empty)
+docker compose exec tools tests/run_all.sh         # 5. optional: 88-check test suite (rebuilds the schema from empty)
 ```
 
 Then, if you like:
@@ -54,7 +54,7 @@ docker compose exec tools bin/sql.sh -c "SELECT * FROM v_rpt_revenue_grouping_se
 ./bin/down.sh                                           # stop (data is kept in a Docker volume)
 ```
 
-cron runs the full load every night at 02:00 in the `TZ` set in `.env` (see `cron/nightly.cron`). Each run writes `logs/nightly/nightly_YYYYMMDD_HHMMSS.log`. The wrapper's exit code is 0 success, 1 failed, 2 rows rejected, 3 skipped (another load is running), 4 bad arguments.
+cron runs the full load every night at 02:00 in the `TZ` set in `.env` (see `cron/nightly.cron`). Each run writes `logs/nightly/nightly_YYYYMMDD_HHMMSS.log`. The wrapper's exit code is 0 success, 1 failed, 2 rows rejected, 3 skipped (another load is running), 4 bad arguments, 5 skipped (the optional pre-load check failed).
 
 ## The data model
 
@@ -107,7 +107,7 @@ The step-by-step build, including the optional extra charts (month-over-month gr
 
 ## Testing
 
-`tests/run_all.sh` rebuilds the schema from empty and runs **79 PASS/FAIL checks**:
+`tests/run_all.sh` rebuilds the schema from empty and runs **88 PASS/FAIL checks**:
 - the schema, and row counts and totals reconciled with the CSVs;
 - idempotency: a rerun changes nothing (checked by a fingerprint that includes every row's last batch id);
 - a deliberately broken input file: exactly the 4 planted bad rows are logged by key and skipped;
@@ -116,7 +116,17 @@ The step-by-step build, including the optional extra charts (month-over-month gr
 - SCD2 versioning and invariants;
 - a batch abandoned by a killed process;
 - all 12 views return rows;
-- the Tableau exports.
+- the Tableau exports;
+- the integration points: the reporting user can read only the 12 views, and a failing pre-load check stops the load.
+
+## Using the warehouse from other applications
+
+The warehouse offers two connection points, so other projects never need to change this repository:
+
+- **Read-only reporting user** (`REPORT_USER` / `REPORT_PASSWORD` in `.env`). It holds the role `DW_REPORTING`, which can `SELECT` the 12 report views and nothing else: no tables, no changes. Connect to `localhost:1521/XEPDB1` from the host, or to `oracle:1521/XEPDB1` from a container on the Docker network `retail_default`, and query e.g. `SELECT * FROM dw.v_rpt_monthly_revenue`. Try it with `docker compose exec tools bin/sql.sh --report -c "SELECT COUNT(*) FROM dw.v_rpt_cohort_retention;"`.
+- **Pre-load check** (`PRELOAD_CHECK` in `.env`). An optional command that `bin/nightly_load.sh` runs before every load, inside the tools container, while it holds the lock. It receives `LOAD_MODE`, `LOAD_SOURCE_DIR` and `LOAD_SOURCE_PATH`. Exit code 0 lets the load run; anything else skips it (wrapper exit code 5) and leaves the database untouched. This is how an extract validator can gate every load.
+
+The Compose project name is fixed as `retail`, so the database volume (`retail_oracle-data`) and the network (`retail_default`) keep the same names whatever the folder is called.
 
 ## Repository
 

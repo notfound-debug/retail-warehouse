@@ -3,6 +3,12 @@
 #   tools  - Debian with Bash, cron and sqlplus. Runs the nightly load, tests and exports.
 # Start everything with ./bin/up.sh (it also waits until the database accepts logins).
 
+# Fixed project name. Docker names the database volume (retail_oracle-data) and the
+# network (retail_default) after the project; without this line they would follow
+# the folder name, and running compose from a renamed or linked folder would start
+# a second, empty database. Other projects join the network by this name.
+name: retail
+
 services:
   oracle:
     image: gvenzl/oracle-xe:21-slim

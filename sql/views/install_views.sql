@@ -28,3 +28,5 @@ PROMPT   v_rpt_weekday_orders_pivot
 @sql/views/11_v_rpt_weekday_orders_pivot.sql
 PROMPT   v_rpt_customer_moves
 @sql/views/12_v_rpt_customer_moves.sql
+PROMPT   grants for the reporting role
+@sql/views/grant_report_access.sql

@@ -6,6 +6,14 @@
 #   bin/nightly_load.sh                    full load from data/raw   (directory RAW_DIR)
 #   bin/nightly_load.sh --delta            SCD2 customer delta from data/delta
 #   bin/nightly_load.sh --source TEST_DIR  full load from another directory object (used by tests)
+#   bin/nightly_load.sh --preload-check 'CMD'  use CMD instead of PRELOAD_CHECK from .env
+#
+# Pre-load check (optional)
+#   If PRELOAD_CHECK in .env is not empty, that command runs before the load,
+#   while the lock is held (e.g. an extract validator from another project).
+#   It sees LOAD_MODE (full/delta), LOAD_SOURCE_DIR (e.g. RAW_DIR) and
+#   LOAD_SOURCE_PATH (the folder holding the files). Exit code 0 = go ahead;
+#   anything else = the load is skipped and nothing in the database changes.
 #
 # What it guarantees
 #   * Only one load at a time: a lock file holds the PID of the running load.
@@ -19,6 +27,7 @@
 #       2  the load finished but rejected some rows (see ETL_ERROR_LOG)
 #       3  skipped: another load is still running
 #       4  wrong command-line arguments
+#       5  skipped: the pre-load check failed
 # =============================================================================
 set -uo pipefail   # no "set -e": failures are handled explicitly so they are always logged
 
@@ -33,13 +42,21 @@ export PATH="/usr/local/bin:$PATH"
 # ---- arguments --------------------------------------------------------------
 MODE="full"
 SOURCE_DIR="RAW_DIR"
+# Only this one setting is read from .env here (the file also holds passwords,
+# which this script does not need; bin/sql.sh reads those itself).
+PRELOAD_CHECK=$(grep -m1 '^PRELOAD_CHECK=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r')
 while [ $# -gt 0 ]; do
     case "$1" in
-        --delta)  MODE="delta"; shift ;;
-        --source) SOURCE_DIR="${2:-}"; shift 2 ;;
-        *)        echo "Usage: $0 [--delta | --source DIRECTORY_OBJECT]"; exit 4 ;;
+        --delta)         MODE="delta"; shift ;;
+        --source)        SOURCE_DIR="${2:-}"; shift 2 ;;
+        --preload-check) PRELOAD_CHECK="${2:-}"; shift 2 ;;
+        *)               echo "Usage: $0 [--delta | --source DIRECTORY_OBJECT] [--preload-check 'CMD']"; exit 4 ;;
     esac
 done
+# A delta load always reads the delta folder.
+if [ "$MODE" = "delta" ]; then
+    SOURCE_DIR="DELTA_DIR"
+fi
 # Only plain names like RAW_DIR; the PL/SQL package also checks against a fixed list.
 if ! [[ "$SOURCE_DIR" =~ ^[A-Z_]+$ ]]; then
     echo "Invalid --source '$SOURCE_DIR': expected an Oracle directory name such as RAW_DIR"
@@ -95,6 +112,26 @@ if ! take_lock; then
 fi
 # From here on we own the lock; release it however the script ends.
 trap 'rm -f "$LOCK_FILE"' EXIT
+
+# ---- optional pre-load check ------------------------------------------------
+# Runs while the lock is held, so the files cannot change between the check
+# and the load because of another run of this script.
+if [ -n "$PRELOAD_CHECK" ]; then
+    case "$SOURCE_DIR" in
+        RAW_DIR)   check_path="$ROOT/data/raw" ;;
+        DELTA_DIR) check_path="$ROOT/data/delta" ;;
+        TEST_DIR)  check_path="$ROOT/data/test" ;;
+        *)         check_path="" ;;
+    esac
+    log "Pre-load check: $PRELOAD_CHECK"
+    LOAD_MODE="$MODE" LOAD_SOURCE_DIR="$SOURCE_DIR" LOAD_SOURCE_PATH="$check_path" \
+        bash -c "$PRELOAD_CHECK" >> "$LOG_FILE" 2>&1
+    check_rc=$?
+    if [ "$check_rc" -ne 0 ]; then
+        finish 5 "SKIPPED: pre-load check failed (its exit code $check_rc); nothing was loaded"
+    fi
+    log "Pre-load check passed"
+fi
 
 # ---- run the load -----------------------------------------------------------
 if [ "$MODE" = "delta" ]; then
