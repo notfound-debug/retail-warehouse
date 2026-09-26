@@ -43,5 +43,12 @@ CREATE OR REPLACE PACKAGE pkg_log AS
     -- Print a timestamped progress message.
     PROCEDURE info (p_message IN VARCHAR2);
 
+    -- Mark every batch still in RUNNING state as FAILED, with an error row
+    -- explaining why. A batch stays RUNNING only if its process died without
+    -- reaching its exception handler (e.g. the container was stopped).
+    -- Only call this when no load can be running: bin/nightly_load.sh calls it
+    -- while holding the lock file.
+    PROCEDURE fail_abandoned_batches;
+
 END pkg_log;
 /

@@ -1,0 +1,12 @@
+# Nightly warehouse load: every day at 02:00 (container timezone = TZ in .env).
+#
+# Installed automatically when the tools container starts (docker/tools/entrypoint.sh).
+# To install by hand inside the tools container:   crontab /work/cron/nightly.cron
+# To check what is installed:                       docker compose exec tools crontab -l
+#
+# nightly_load.sh writes a full log per run to logs/nightly/ (newest 14 kept);
+# cron.log only receives its one-line summary per run.
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+0 2 * * * /work/bin/nightly_load.sh >> /work/logs/cron.log 2>&1

@@ -308,6 +308,8 @@ If the load dies during the fact step:
 
 Recovery is simply **re-running the load**. Idempotency (below) guarantees no duplicates.
 
+*Added in M5:* if the process is **killed** (e.g. the container stops) it never reaches its exception handler, so its batch would stay `RUNNING` forever. Before every load, while holding the lock (so no other load can really be running), `bin/nightly_load.sh` calls `pkg_log.fail_abandoned_batches`. That procedure marks any leftover `RUNNING` batch as FAILED and adds an error row saying why. The wrapper's exit codes are 0 success, 1 failed, 2 rows rejected, 3 skipped because another load holds the lock, and 4 bad arguments.
+
 The fact commits once at the end, not once per 10,000-row chunk. At 112K rows the undo cost is small, and "all or nothing" is easier to reason about. (Commit-per-chunk would also be safe here because of MERGE, and is the choice for much larger volumes.)
 
 ### Idempotency: rerunning the load must not duplicate rows
@@ -353,10 +355,10 @@ Common filter: `order_status NOT IN ('canceled','unavailable')`. Revenue means `
 | 5 | v_rpt_seller_rank_in_state | Who are the 10 leading sellers in each seller state, and what share of that state's revenue does each hold? | CTE, RANK(), SUM() OVER (PARTITION BY) ratio |
 | 6 | v_rpt_cohort_retention | Of the customers who first bought in month X, what percentage bought again 1, 2, 3 … months later? | CTEs, MIN() OVER, CONNECT BY row generator (fills 0% months) |
 | 7 | v_rpt_late_delivery_cube | What share of delivered orders arrived after the estimated date, by customer state and year, with every subtotal? | CTE, CUBE, GROUPING_ID() |
-| 8 | v_rpt_category_quarter_pivot | How does each category's revenue compare across the quarters of 2017 and 2018? | PIVOT |
+| 8 | v_rpt_category_quarter_pivot | How does each category's revenue compare across the quarters of 2017 and 2018? | CTE, PIVOT |
 | 9 | v_rpt_repeat_purchase_gap | For customers who ordered more than once, how many days pass between one order and the next? | CTEs, ROW_NUMBER(), LAG(), LEAD(), COUNT() OVER |
 | 10 | v_rpt_revenue_grouping_sets | What is revenue by year, by payment type, and in total, all in one result set? | GROUPING SETS, GROUPING_ID() |
-| 11 | v_rpt_weekday_orders_pivot | Which weekday gets the most orders, and did that change between 2017 and 2018? | PIVOT |
+| 11 | v_rpt_weekday_orders_pivot | Which weekday gets the most orders, and did that change between 2017 and 2018? | CTE, PIVOT |
 | 12 | v_rpt_customer_moves | Which customers changed address, from where to where, and when did the warehouse record it? (SCD2) | CTE, LAG() OVER (PARTITION BY customer ORDER BY version) |
 
 Coverage, where the requirement is at least 2 each:

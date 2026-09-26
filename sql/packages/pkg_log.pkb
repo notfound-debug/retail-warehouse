@@ -72,5 +72,27 @@ CREATE OR REPLACE PACKAGE BODY pkg_log AS
         DBMS_OUTPUT.PUT_LINE(TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS') || '  ' || p_message);
     END info;
 
+
+    PROCEDURE fail_abandoned_batches
+    IS
+        PRAGMA AUTONOMOUS_TRANSACTION;
+    BEGIN
+        FOR b IN (SELECT batch_id FROM etl_batch WHERE status = 'RUNNING' ORDER BY batch_id) LOOP
+            INSERT INTO etl_error_log (error_id, batch_id, logged_at, step_name, error_message)
+            VALUES (seq_etl_error.NEXTVAL, b.batch_id, SYSDATE, 'PKG_LOG.FAIL_ABANDONED_BATCHES',
+                    'Batch was still RUNNING when the next load started: its process was killed '
+                    || 'or lost its database connection before it could record an outcome.');
+
+            UPDATE etl_batch
+            SET    status      = 'FAILED',
+                   finished_at = SYSDATE,
+                   error_count = (SELECT COUNT(*) FROM etl_error_log WHERE batch_id = b.batch_id)
+            WHERE  batch_id = b.batch_id;
+
+            info('Abandoned batch ' || b.batch_id || ' was still RUNNING; marked FAILED');
+        END LOOP;
+        COMMIT;
+    END fail_abandoned_batches;
+
 END pkg_log;
 /
