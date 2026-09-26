@@ -40,7 +40,7 @@ Everything runs in Docker: nothing needs to be installed on the host except Dock
 cp .env.example .env                               # 1. then edit the two passwords in .env
 ./bin/up.sh                                        # 2. start Oracle + tools; waits until the DW user can log in
 docker compose exec tools bin/install.sh           # 3. create tables, date dimension, packages, views
-docker compose exec tools bin/nightly_load.sh      # 4. full load (about 20-25 s); prints one summary line
+docker compose exec tools bin/nightly_load.sh      # 4. full load (about 20-40 s); prints one summary line
 docker compose exec tools tests/run_all.sh         # 5. optional: 79-check test suite (rebuilds the schema from empty)
 ```
 
