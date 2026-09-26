@@ -20,6 +20,7 @@
 #   8  abandoned     a batch left RUNNING is marked FAILED by the next run
 #   9  views         all 12 report views return rows
 #  10  arguments     bad arguments are rejected
+#  11  exports       the two Tableau CSVs match their views and the warehouse totals
 # Exit code: 0 if every check passed, 1 otherwise.
 # =============================================================================
 set -uo pipefail
@@ -237,6 +238,22 @@ check "every view stores its business question" \
 section "10. Command-line arguments"
 check "unknown option rejected (exit 4)"      "$(load --bogus)" "4"
 check "unsafe --source rejected (exit 4)"     "$(load --source 'x; rm -rf /')" "4"
+
+# -----------------------------------------------------------------------------
+section "11. Tableau exports"
+bin/export_tableau.sh > /dev/null
+check "export_tableau.sh exit code"           "$?" "0"
+check "revenue_trend.csv header" "$(head -1 tableau/revenue_trend.csv)" \
+      "month_start,year_num,month_num,order_count,revenue,avg_order_value,prev_month_revenue,mom_growth_pct,ytd_revenue"
+check "revenue_trend.csv rows = view rows" \
+      "$(( $(wc -l < tableau/revenue_trend.csv) - 1 ))" "$(sql_value "SELECT COUNT(*) FROM v_rpt_monthly_revenue")"
+check "revenue_trend.csv revenue total = warehouse" \
+      "$(awk -F, 'NR > 1 { s += $5 } END { printf "%.2f", s }' tableau/revenue_trend.csv)" \
+      "$(sql_value "SELECT TO_CHAR(SUM(price), 'fm99999999.00') FROM fact_sales WHERE order_status NOT IN ('canceled', 'unavailable')")"
+check "cohort_retention.csv header" "$(head -1 tableau/cohort_retention.csv)" \
+      "cohort_month,months_since_first,cohort_size,active_customers,retention_pct"
+check "cohort_retention.csv rows = view rows" \
+      "$(( $(wc -l < tableau/cohort_retention.csv) - 1 ))" "$(sql_value "SELECT COUNT(*) FROM v_rpt_cohort_retention")"
 
 # -----------------------------------------------------------------------------
 echo
